@@ -5,9 +5,9 @@ from theseus.detection.models import MODEL_REGISTRY
 from theseus.detection.augmentations import *
 from theseus.base.datasets import DATALOADER_REGISTRY
 from theseus.utilities.getter import (get_instance, get_instance_recursively)
-from theseus.utilities.cuda import get_devices_info
+from theseus.utilities.cuda import get_devices_info, resolve_inference_device
 from theseus.utilities.loggers import LoggerObserver, StdoutLogger
-from theseus.utilities.loading import load_state_dict
+from theseus.utilities.loading import load_state_dict, torch_load_checkpoint
 from theseus.detection.augmentations import TRANSFORM_REGISTRY, TTA
 from theseus.detection.models import MODEL_REGISTRY
 from theseus.opt import Config
@@ -127,8 +127,8 @@ class DetectionPipeline(object):
 
         self.transform_cfg = Config.load_yaml(opt['global']['cfg_transform'])
         self.model_name = opt["model"]["name"].lower()
-        self.device_name = opt['global']['device']
-        self.device = torch.device(self.device_name)
+        self.device_name, self.device = resolve_inference_device(
+            opt['global']['device'])
 
         # Dection arguments defined in modules.py
         self.args = input_args
@@ -169,7 +169,8 @@ class DetectionPipeline(object):
         ).to(self.device)
 
         if input_args.weight:
-            state_dict = torch.load(input_args.weight)
+            state_dict = torch_load_checkpoint(
+                input_args.weight, map_location=self.device)
             self.model = load_state_dict(self.model, state_dict,
                                          'model', is_detection=True)
 

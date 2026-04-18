@@ -55,24 +55,25 @@ class YOLOv8(BaseBackbone):
             labels = []
             scores = []
 
-            boxes = result.boxes.cpu().numpy()
-            for _, box in enumerate(boxes):
-                r = box.xyxy[0].astype(int)
+            if result.boxes is None or len(result.boxes) == 0:
+                continue
+
+            for box in result.boxes:
+                # xyxy -> top-left xywh (same as YOLOv5 + draw_bboxes_v2 / label_enhancement)
+                xyxy = box.xyxy[0].detach().cpu().numpy().astype(np.int64)
+                x1, y1, x2, y2 = int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])
+                r = np.array([x1, y1, x2 - x1, y2 - y1], dtype=np.int64)
                 cls = int(box.cls[0])
                 conf = float(box.conf[0])
 
                 bboxes.append(r)
                 labels.append(cls)
                 scores.append(conf)
-            
-            if len(bboxes) == 0:
-                continue
 
-            if len(bboxes) > 0:
-                out.append({
-                    'bboxes': np.array(bboxes),
-                    'classes': np.array(labels),
-                    'scores': np.array(scores),
-                })
+            out.append({
+                'bboxes': np.array(bboxes),
+                'classes': np.array(labels),
+                'scores': np.array(scores),
+            })
 
         return out

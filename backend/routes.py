@@ -1,7 +1,20 @@
 from flask_cors import cross_origin
-from flask import request, render_template, redirect, make_response
+from flask import request, render_template, redirect, make_response, jsonify
 
-from .utils import process_webcam_capture, process_url_input, process_image_file, process_output_file, process_upload_file
+from .modules import infer_food_detection, detection_result_to_payload
+from .utils import (
+    process_webcam_capture,
+    process_url_input,
+    process_image_file,
+    process_output_file,
+    process_upload_file,
+)
+
+
+def _parse_bool(val, default=False):
+    if val is None:
+        return default
+    return str(val).strip().lower() in ('1', 'true', 'yes', 'on')
 
 
 def set_routes(app):
@@ -21,6 +34,58 @@ def set_routes(app):
     def detect_by_webcam_page():
         return render_template("webcam-capture.html")
 
+
+    @app.route('/api/analyze', methods=['POST'])
+    @cross_origin(origins='*')
+    def api_analyze():
+        """
+        Multipart POST with field ``file`` (png/jpg/jpeg).
+        Query params: model (default yolov8s), conf, iou, enhanced, ensemble, tta (all optional).
+        Returns JSON: menu_items, ingredients, detections (no nutrition fields).
+        """
+        if 'file' not in request.files or not request.files['file'].filename:
+            return jsonify(success=False, error='missing multipart field "file"'), 400
+
+        filename, filepath, filetype = process_upload_file(request)
+
+        if filetype != 'image':
+            return jsonify(
+                success=False,
+                error='unsupported file type; use png, jpg, or jpeg',
+            ), 400
+
+        model = request.args.get('model', request.args.get('model_types', 'yolov8s'))
+        model = str(model).lower()
+
+        try:
+            min_conf = float(request.args.get('conf', request.args.get('confidence', '0.15')))
+            min_iou = float(request.args.get('iou', request.args.get('iou_threshold', '0.5')))
+        except ValueError:
+            return jsonify(success=False, error='invalid conf or iou (must be numbers)'), 400
+
+        enhanced = _parse_bool(request.args.get('enhanced'))
+        ensemble = _parse_bool(request.args.get('ensemble'))
+        tta = _parse_bool(request.args.get('tta'))
+
+        try:
+            result_dict, _class_names, image_id, img_h, img_w, _ori = infer_food_detection(
+                filepath,
+                model_name=model,
+                tta=tta,
+                ensemble=ensemble,
+                min_iou=min_iou,
+                min_conf=min_conf,
+                enhance_labels=enhanced,
+            )
+            payload = detection_result_to_payload(result_dict, image_id, img_w, img_h)
+            payload['model'] = model
+            return jsonify(payload)
+
+        except FileNotFoundError as e:
+            return jsonify(success=False, error=str(e)), 400
+        except Exception as e:
+            app.logger.exception('api/analyze failed')
+            return jsonify(success=False, error=str(e)), 500
 
     @app.route('/analyze', methods=['POST', 'GET'])
     @cross_origin(supports_credentials=True)

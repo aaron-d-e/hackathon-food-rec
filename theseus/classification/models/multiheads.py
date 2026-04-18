@@ -5,7 +5,7 @@ from timm.models.layers import SelectAdaptivePool2d
 
 import torch
 import torch.nn as nn
-from theseus.utilities.loading import load_state_dict
+from theseus.utilities.loading import load_state_dict, torch_load_checkpoint
 
 from theseus.utilities.loggers.observer import LoggerObserver
 LOGGER = LoggerObserver.getLogger('main')
@@ -94,7 +94,7 @@ class MultiHeadModel(nn.Module):
 
         # Load pretrained backbone
         if pretrained_backbone is not None:
-            state_dict = torch.load(pretrained_backbone)
+            state_dict = torch_load_checkpoint(pretrained_backbone)
             load_state_dict(self, state_dict, 'model')
 
         self.feature_layer_name = list(self.model.named_children())[-1][0]

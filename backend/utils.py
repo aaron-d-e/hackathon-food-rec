@@ -155,7 +155,7 @@ def process_upload_file(request):
         # Save file to /static/uploads
         filepath = os.path.join(UPLOAD_FOLDER, filename)
 
-        np_img = np.fromstring(data, np.uint8)
+        np_img = np.frombuffer(data, dtype=np.uint8)
         img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
         cv2.imwrite(filepath, img)
     

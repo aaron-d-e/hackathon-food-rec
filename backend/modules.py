@@ -9,7 +9,6 @@ from theseus.utilities import box_fusion, postprocessing
 from theseus.apis.inference import SegmentationPipeline, DetectionPipeline, ClassificationPipeline
 from theseus.opt import Opts, InferenceArguments
 
-from .edamam.api import get_info_from_db
 from .constants import CACHE_DIR, CSV_FOLDER
 
 
@@ -130,22 +129,12 @@ def drop_duplicate_fill0(result_dict):
 
 def append_food_name(food_dict, class_names):
     """
-    Append food names from labels for nutrition analysis
+    Append human-readable food names from YOLO class ids.
     """
     food_labels = food_dict['labels']  # [0].to_list()
     food_names = [' '.join(class_names[int(i)].split('-'))
                   for i in food_labels]
     food_dict['names'] = food_names
-    return food_dict
-
-
-def append_food_info(food_dict):
-    """
-    Append nutrition info from database (db.json)
-    """
-    food_names = food_dict['names']
-    food_info = get_info_from_db(food_names)
-    food_dict.update(food_info)
     return food_dict
 
 
@@ -336,6 +325,104 @@ def ensemble_models(input_path, image_size, min_iou, min_conf, tta=False):
     return result_dict, class_names
 
 
+def infer_food_detection(
+        input_path,
+        model_name,
+        tta=False,
+        ensemble=False,
+        min_iou=0.5,
+        min_conf=0.1,
+        enhance_labels=False):
+    """
+    Run detector (+ optional EfficientNet refinement). Does not render images or CSV.
+    Returns (result_dict, class_names, ori_hashed_key, img_w, img_h).
+    """
+    ori_hashed_key = os.path.splitext(os.path.basename(input_path))[0]
+
+    ori_img = cv2.imread(input_path)
+    if ori_img is None:
+        raise FileNotFoundError(f"Could not read image: {input_path}")
+
+    # Keep uint8: uint16 with 0–255 values saves as 16-bit PNG and looks black in browsers
+    ori_img = cv2.cvtColor(ori_img, cv2.COLOR_BGR2RGB)
+    img_h, img_w, _ = ori_img.shape
+
+    if not ensemble:
+        args = DetectionArguments(
+            model_name=model_name,
+            input_path=input_path,
+            output_path='',
+            min_conf=min_conf,
+            min_iou=min_iou,
+            tta=tta
+        )
+
+        det_args = InferenceArguments(key="detection")
+        opts = Opts(det_args).parse_args()
+        det_pipeline = DetectionPipeline(opts, args)
+        class_names = det_pipeline.class_names
+
+        result_dict = det_pipeline.inference()
+
+        result_dict['boxes'] = result_dict['boxes'][0]
+        result_dict['labels'] = result_dict['labels'][0]
+        result_dict['scores'] = result_dict['scores'][0]
+
+    else:
+        result_dict, class_names = ensemble_models(
+            input_path, [img_w, img_h], min_iou, min_conf, tta=tta)
+
+    result_dict = append_food_name(result_dict, class_names)
+
+    if enhance_labels:
+        result_dict = label_enhancement(ori_img, result_dict)
+
+    return result_dict, class_names, ori_hashed_key, img_h, img_w, ori_img
+
+
+def detection_result_to_payload(result_dict, image_id, img_w, img_h):
+    """Build JSON-serializable summary: menu_items, ingredients, detections."""
+    labels = result_dict.get('labels', [])
+    n = len(labels)
+
+    detections = []
+    all_names = []
+    for i in range(n):
+        box = result_dict['boxes'][i]
+        name = result_dict['names'][i]
+        score = float(result_dict['scores'][i])
+        cid = int(result_dict['labels'][i])
+        detections.append({
+            'name': name,
+            'confidence': round(score, 6),
+            'class_id': cid,
+            'bbox': {
+                'x': float(box[0]),
+                'y': float(box[1]),
+                'width': float(box[2]),
+                'height': float(box[3]),
+            },
+        })
+        all_names.append(name)
+
+    menu_items = sorted(set(all_names))
+    ingredients = sorted(set(
+        ' '.join(n.replace('_', ' ').split()).lower()
+        for n in all_names
+    ))
+
+    return {
+        'success': True,
+        'image_id': image_id,
+        'width': img_w,
+        'height': img_h,
+        'menu_items': menu_items,
+        'ingredients': ingredients,
+        'detections': detections,
+        'count': len(detections),
+    }
+
+
 def get_prediction(
         input_path,
         output_path,
@@ -366,52 +453,15 @@ def get_prediction(
 
         return output_path, 'semantic'
 
-    # get hashed key from image path
-    ori_hashed_key = os.path.splitext(os.path.basename(input_path))[0]
-
-    ori_img = cv2.imread(input_path)
-
-    ori_img = np.array(ori_img, dtype=np.uint16)
-    ori_img = cv2.cvtColor(ori_img, cv2.COLOR_BGR2RGB)
-    img_h, img_w, _ = ori_img.shape
-
-    if not ensemble:
-        args = DetectionArguments(
-            model_name=model_name,
-            input_path=input_path,
-            output_path=output_path,
-            min_conf=min_conf,
-            min_iou=min_iou,
-            tta=tta
-        )
-
-        det_args = InferenceArguments(key="detection")
-        opts = Opts(det_args).parse_args()
-        det_pipeline = DetectionPipeline(opts, args)
-        class_names = det_pipeline.class_names
-
-        result_dict = det_pipeline.inference()
-
-        result_dict['boxes'] = result_dict['boxes'][0]
-        result_dict['labels'] = result_dict['labels'][0]
-        result_dict['scores'] = result_dict['scores'][0]
-
-        # Post process (optional)
-        # result_dict = postprocess(result_dict, img_w, img_h, min_iou, min_conf)
-
-    else:
-        result_dict, class_names = ensemble_models(
-            input_path, [img_w, img_h], min_iou, min_conf, tta=tta)
-
-    # add food name
-    result_dict = append_food_name(result_dict, class_names)
-
-    # enhance by using a classifier
-    if enhance_labels:
-        result_dict = label_enhancement(ori_img, result_dict)
-
-    # add food infomation and save to file
-    result_dict = append_food_info(result_dict)
+    result_dict, class_names, ori_hashed_key, img_h, img_w, ori_img = infer_food_detection(
+        input_path,
+        model_name=model_name,
+        tta=tta,
+        ensemble=ensemble,
+        min_iou=min_iou,
+        min_conf=min_conf,
+        enhance_labels=enhance_labels,
+    )
 
     # draw result
     draw_image(output_path, ori_img, result_dict, class_names)
@@ -423,9 +473,11 @@ def get_prediction(
     save_cache(csv_result_dict, ori_hashed_key+'_info',
                CSV_FOLDER, exclude=['boxes', "labels", "scores"])
 
-    # Transpose CSV
-    df = pd.read_csv(os.path.join(CSV_FOLDER, ori_hashed_key+'_info.csv'))
-    df.set_index('names').T.to_csv(os.path.join(
-        CSV_FOLDER, ori_hashed_key+'_info2.csv'))
+    info_csv = os.path.join(CSV_FOLDER, ori_hashed_key + '_info.csv')
+    if os.path.isfile(info_csv):
+        df = pd.read_csv(info_csv)
+        if not df.empty and 'names' in df.columns:
+            df.set_index('names').T.to_csv(os.path.join(
+                CSV_FOLDER, ori_hashed_key + '_info2.csv'))
 
     return output_path, 'detection'

@@ -3,9 +3,9 @@ import os
 import torch
 
 from theseus.utilities.getter import (get_instance, get_instance_recursively)
-from theseus.utilities.cuda import get_devices_info
+from theseus.utilities.cuda import get_devices_info, resolve_inference_device
 from theseus.utilities.loggers import LoggerObserver, StdoutLogger
-from theseus.utilities.loading import load_state_dict
+from theseus.utilities.loading import load_state_dict, torch_load_checkpoint
 from theseus.classification.datasets import DATALOADER_REGISTRY
 from theseus.classification.augmentations import TRANSFORM_REGISTRY
 from theseus.classification.models import MODEL_REGISTRY
@@ -85,8 +85,8 @@ class ClassificationPipeline(object):
         self.logger.text(self.opt, level=LoggerObserver.INFO)
 
         self.transform_cfg = Config.load_yaml(opt['global']['cfg_transform'])
-        self.device_name = opt['global']['device']
-        self.device = torch.device(self.device_name)
+        self.device_name, self.device = resolve_inference_device(
+            opt['global']['device'])
 
         self.weights = opt['global']['weights']
 
@@ -115,7 +115,8 @@ class ClassificationPipeline(object):
             classnames=CLASSNAMES).to(self.device)
 
         if self.weights:
-            state_dict = torch.load(self.weights)
+            state_dict = torch_load_checkpoint(
+                self.weights, map_location=self.device)
             self.model = load_state_dict(self.model, state_dict, 'model')
 
     def infocheck(self):

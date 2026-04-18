@@ -4,6 +4,21 @@ from theseus.utilities.loggers.observer import LoggerObserver
 LOGGER = LoggerObserver.getLogger("main")
 
 
+def torch_load_checkpoint(path, map_location=None):
+    """
+    Load checkpoints saved with pickled modules (e.g. Ultralytics YOLO).
+    PyTorch 2.6+ defaults torch.load(weights_only=True), which rejects those
+    files; trusted project weights need weights_only=False.
+    """
+    kw = {}
+    if map_location is not None:
+        kw["map_location"] = map_location
+    try:
+        return torch.load(path, weights_only=False, **kw)
+    except TypeError:
+        return torch.load(path, **kw)
+
+
 def load_yaml(path):
     with open(path, 'rt') as f:
         return yaml.safe_load(f)

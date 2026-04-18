@@ -1,3 +1,5 @@
+import os
+
 import gdown
 
 
@@ -7,10 +9,17 @@ def download_from_drive(id_or_url, output, md5=None, quiet=False, cache=True):
     else:
         url = 'https://drive.google.com/uc?id={}'.format(id_or_url)
 
-    if not cache:
-        return gdown.download(url, output, quiet=quiet)
-    else:
-        return gdown.cached_download(url, md5=md5, quiet=quiet)
+    # gdown>=6 removed md5 from download(); cached_download then breaks.
+    # Skip re-download when output already exists (same effect when md5 is unused).
+    if cache and output and os.path.isfile(output) and os.path.getsize(output) > 0:
+        return output
+
+    if output:
+        parent = os.path.dirname(os.path.abspath(output))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+
+    return gdown.download(url, output, quiet=quiet)
 
 weight_urls = {
     'yolov8s': "1f2kOOyCQ8aHzSHPH8jf9Z6cT4ai-yqmx",
